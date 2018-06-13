@@ -1,72 +1,58 @@
 const _cluster = require("cluster");
 const _http = require("http");
 
+require('dotenv').config();
+
 const _soapHandler = require("./soapHandler");
+const _logger = require("./file-logger");
 
 let shutdown = false;
-
 let serverInstance = null;
 
 function exec( request, response ){
-    _soapHandler.execute( request, response );
     readRequest( request )
     .then( (result)=>{
         if( result === "SHUTDOWN" ){
+            response.writeHead(200);
+            response.end( result );
             stopServer();
+        } else {
+            _logger.debug( "No recognized commands, passing onto implmentation" );
+            _soapHandler.execute( result, response );
         }
     });
-    /*
-    readRequest( request )
-    .then( (result) =>{
-        response.writeHead(200);
-        response.end(result);
-        if( result === "SHUTDOWN" ){
-            stopServer();
-        }
-    })
-    .catch(err=>{
-        console.log(err);
-        response.writeHead(501);
-        response.end("ERROR");
-    });
-    */
 }
 
 function readRequest( request ){
-    let requestPayload = "";
     return new Promise( (resolve,reject)=>{
         let payload = "";
         request.on( "data", data=>{
             payload += data.toString();
         });
         request.on( "end", ()=>{
-            console.log( "Request Payload :", payload );
             if( payload === "close" ){
                 process.send({state: "shutdown"});
                 resolve( "SHUTDOWN" );
             } 
-            else if( payload === "x" ){
-                t.run();
-            }
             else {
-                resolve( "OK" );
+                resolve( payload );
             }
         });
     });
 }
 
 function startServer(port){
-    port = port || 9988;
+    port = process.env.PORT || 9988;
     serverInstance = _http.createServer(exec);
-    console.log( "Server listening on... " + port );
+    _logger.info( "Server listening on... " + port );
     process.send({state:"ServerStarted"});
     serverInstance.listen(port);
 }
 
 function stopServer(){
     serverInstance.close( ()=>{
-        console.log( "Server stopped listening..." );
-        console.log( "Server shutting down" );
+        _logger.info( "Server stopped listening..." );
+        _logger.info( "Server shutting down" );
         setTimeout( ()=> process.exit(0), 1000 );
     });
 }
@@ -74,20 +60,27 @@ function stopServer(){
 if( _cluster.isMaster ){
     worker = _cluster.fork();
     _cluster.on( "exit", ( worker, code, signal )=>{
-        console.log( "Worker " + worker.process.pid + " died (" + code + ")" );
+        _logger.info( "Worker " + worker.process.pid + " died (" + code + ")" );
         if( shutdown !== true ){
-            console.log( "Restarting... ");
+            _logger.info( "Restarting... ");
             _cluster.fork();
         }
     });
 
     worker.on("message", message=>{
-        console.log( "Message recvd : ", message );
         if( message && message.state === "shutdown" ){
             shutdown = true;
         }
     });
+
+    process.on( "SIGINT", ()=>{
+        shutdown = true;
+    });
 } else {
     let port = 9988;
     startServer(port);
+
+    process.on( "SIGINT", ()=>{
+        stopServer();
+    });
 }
